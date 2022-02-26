@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net"
+	"os"
 	"strings"
 
 	"go.uber.org/zap"
 )
-
-var SERVER_ADDRESS = "127.0.0.1:5454"
 
 const (
 	SendVoice int = iota
@@ -21,8 +21,9 @@ const (
 )
 
 type Message struct {
-	MsgType int    `json:"msg_type"`
-	Data    string `json:"data"`
+	MsgType  int    `json:"msg_type"`
+	Data     string `json:"data"`
+	MetaData string `json:"meta_data"`
 }
 
 func writeData(connection *bufio.Writer, message Message) error {
@@ -55,23 +56,23 @@ func readData(connection *bufio.Reader) (Message, error) {
 }
 
 func printValidCommands() {
-	fmt.Println("You can use next commands for communication with app:")
-	fmt.Println("\\StartVoice - you start sending your voice messages to other people in chat")
-	fmt.Println("\\FinishVoice - you finish sending your voice messages to other people in chat")
-	fmt.Println("\\GetUsers - you get names of all active users in chat")
+	fmt.Println("> You can use next commands for communication with app:")
+	fmt.Println("> \\SendVoice FileName - you send to all clients file with name \"FileName\"")
+	fmt.Println("> \\GetUsers - you get names of all active users in chat")
+	fmt.Println("> \\Stop - you stop app")
 }
 
 func setRoomId(reader *bufio.Reader, writer *bufio.Writer) error {
 	var answer string
-	fmt.Println("Do you want to create new room [Yes/No]:")
+	fmt.Println("> Do you want to create new room [Yes/No]:")
 	fmt.Scanf("%s\n", &answer)
 
 	var info string
 	if answer == "Yes" {
-		fmt.Println("Enter your new room id:")
+		fmt.Println("> Enter your new room id:")
 		info = "new"
 	} else {
-		fmt.Println("Enter your room id:")
+		fmt.Println("> Enter your room id:")
 		info = "old"
 	}
 
@@ -79,8 +80,8 @@ func setRoomId(reader *bufio.Reader, writer *bufio.Writer) error {
 		var err error
 		var roomId string
 		fmt.Scanf("%s\n", &roomId)
-		fmt.Println(info + ":" + roomId)
-		if err = writeData(writer, Message{SetRoomId, info + ":" + roomId}); err != nil {
+
+		if err = writeData(writer, Message{SetRoomId, info + ":" + roomId, ""}); err != nil {
 			return err
 		}
 
@@ -88,7 +89,7 @@ func setRoomId(reader *bufio.Reader, writer *bufio.Writer) error {
 		if isCorrect, err = readData(reader); err != nil {
 			return err
 		}
-		fmt.Println(isCorrect.Data)
+		fmt.Println("> " + isCorrect.Data)
 		if strings.Split(isCorrect.Data, ".")[0] == "Correct room id" {
 			break
 		}
@@ -98,7 +99,7 @@ func setRoomId(reader *bufio.Reader, writer *bufio.Writer) error {
 }
 
 func setName(reader *bufio.Reader, writer *bufio.Writer) error {
-	fmt.Println("Enter your name:")
+	fmt.Println("> Enter your name:")
 	for {
 		var err error
 		var name string
@@ -106,7 +107,7 @@ func setName(reader *bufio.Reader, writer *bufio.Writer) error {
 			return err
 		}
 
-		if err = writeData(writer, Message{SetName, name}); err != nil {
+		if err = writeData(writer, Message{SetName, name, ""}); err != nil {
 			return err
 		}
 
@@ -114,7 +115,8 @@ func setName(reader *bufio.Reader, writer *bufio.Writer) error {
 		if isCorrect, err = readData(reader); err != nil {
 			return err
 		}
-		fmt.Println(isCorrect.Data)
+		fmt.Println("> " + isCorrect.Data)
+
 		if isCorrect.Data == "Correct name. You can start chatting" {
 			break
 		}
@@ -125,24 +127,43 @@ func setName(reader *bufio.Reader, writer *bufio.Writer) error {
 }
 
 func sendClientMessages(writer *bufio.Writer, ch chan error) {
-	isVoice := false
 	for {
-		var clientMessage string
-		fmt.Scanf("%s\n", &clientMessage)
-		if clientMessage == "\\StartVoice" {
-			isVoice = true
-		} else if clientMessage == "\\FinishVoice" {
-			isVoice = false
+		var msgType int
+		var data string = ""
+		var metaData string = ""
+
+		clientMessage, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		clientMessage = strings.TrimSuffix(clientMessage, "\r\n")
+		clientMessage = strings.TrimSuffix(clientMessage, "\n")
+
+		if strings.HasPrefix(clientMessage, "\\SendVoice ") {
+			info := strings.SplitAfter(clientMessage, " ")
+
+			byteData, err := ioutil.ReadFile(info[1])
+			if err != nil {
+				ch <- err
+				return
+			}
+
+			msgType = SendVoice
+			data = string(byteData)
+			metaData = info[1]
+
 		} else if clientMessage == "\\GetUsers" {
-			if err := writeData(writer, Message{GetUsers, ""}); err != nil {
-				ch <- err
-				return
-			}
-		} else if isVoice {
-			if err := writeData(writer, Message{SendVoice, clientMessage}); err != nil {
-				ch <- err
-				return
-			}
+			msgType = GetUsers
+
+		} else if clientMessage == "\\Stop" {
+			ch <- nil
+			return
+
+		} else {
+			fmt.Println("Wrong type of command")
+			continue
+		}
+
+		if err := writeData(writer, Message{msgType, data, metaData}); err != nil {
+			ch <- err
+			return
 		}
 	}
 }
@@ -162,12 +183,25 @@ func getServerMessages(reader *bufio.Reader, ch chan error) {
 				ch <- err
 				return
 			}
-			fmt.Println("Users:")
+
+			fmt.Println("> Users:")
 			for index, user := range users {
-				fmt.Printf("%d) %s\n", index, user)
+				fmt.Printf("> %d) %s\n", index, user)
 			}
+
 		} else if message.MsgType == SendText {
-			fmt.Println(message.Data)
+			fmt.Println("> " + message.Data)
+
+		} else if message.MsgType == SendVoice {
+			info := strings.Split(message.MetaData, "|")
+			sender, fileName := info[0], info[1]
+
+			fmt.Printf("New message from %s in file \"%s\"\n", sender, fileName)
+			err = ioutil.WriteFile(fileName, []byte(message.Data), 0644)
+			if err != nil {
+				ch <- err
+				return
+			}
 		}
 
 	}
@@ -204,9 +238,28 @@ func handleConnection(c net.Conn, logger *zap.Logger) {
 	}
 }
 
+func startConnection() net.Conn {
+	for {
+		var serverIp, port string
+		fmt.Println("> Enter server ip:")
+		fmt.Scanln(&serverIp)
+
+		fmt.Println("> Enter server port:")
+		fmt.Scanln(&port)
+
+		serverAddress := serverIp + ":" + port
+		c, err := net.Dial("tcp", serverAddress)
+		if err != nil {
+			fmt.Printf("> Problems with connection to server \"%s\". Error: %s\n", serverAddress, err)
+		} else {
+			return c
+		}
+	}
+}
+
 func main() {
 	var loggerConfig = zap.NewProductionConfig()
-	loggerConfig.Level.SetLevel(zap.DebugLevel)
+	loggerConfig.Level.SetLevel(zap.ErrorLevel)
 
 	logger, err := loggerConfig.Build()
 	if err != nil {
@@ -214,13 +267,9 @@ func main() {
 	}
 	logger.Info("Start client")
 
-	c, err := net.Dial("tcp", SERVER_ADDRESS)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	fmt.Println("Start connection with server")
+	c := startConnection()
 	defer c.Close()
+	logger.Info("Start connection with server")
 
 	handleConnection(c, logger)
 }

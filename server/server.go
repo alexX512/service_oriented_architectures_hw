@@ -20,8 +20,9 @@ const (
 )
 
 type Message struct {
-	MsgType int    `json:"msg_type"`
-	Data    string `json:"data"`
+	MsgType  int    `json:"msg_type"`
+	Data     string `json:"data"`
+	MetaData string `json:"meta_data"`
 }
 
 func writeData(connection *bufio.ReadWriter, message Message) error {
@@ -41,7 +42,7 @@ func writeData(connection *bufio.ReadWriter, message Message) error {
 }
 
 func writeTextData(connection *bufio.ReadWriter, message string) error {
-	return writeData(connection, Message{SendText, message})
+	return writeData(connection, Message{SendText, message, ""})
 }
 
 func readData(connection *bufio.ReadWriter) (Message, error) {
@@ -123,6 +124,7 @@ func getUserMessages(userName string, connection *bufio.ReadWriter, connMap *syn
 		if err != nil {
 			return "Error during reading client message", err
 		}
+
 		if message.MsgType == GetUsers {
 			var users []string
 			connMap.Range(func(key, value interface{}) bool {
@@ -135,16 +137,18 @@ func getUserMessages(userName string, connection *bufio.ReadWriter, connMap *syn
 				return "", err
 			}
 
-			if err := writeData(connection, Message{GetUsers, string(data)}); err != nil {
+			if err := writeData(connection, Message{GetUsers, string(data), ""}); err != nil {
 				return "", err
 			}
+
 		} else if message.MsgType == SendVoice {
-			userInput := message.Data
+			userVoice := message.Data
+			userFile := message.MetaData
 
 			connMap.Range(func(key, value interface{}) bool {
 				if key != userName {
 					if conn, ok := value.(*bufio.ReadWriter); ok {
-						if err := writeTextData(conn, "> "+userName+": "+userInput); err != nil { // Rewrite to work with voice
+						if err := writeData(conn, Message{SendVoice, userVoice, userName + "|" + userFile}); err != nil {
 							return false
 						}
 					}
@@ -183,9 +187,11 @@ func handleUserConnection(c net.Conn, connMap *sync.Map, logger *zap.Logger) {
 	}
 }
 
+var SERVER_PORT = 5454
+
 func main() {
 	var loggerConfig = zap.NewProductionConfig()
-	loggerConfig.Level.SetLevel(zap.DebugLevel)
+	loggerConfig.Level.SetLevel(zap.ErrorLevel)
 
 	logger, err := loggerConfig.Build()
 	if err != nil {
@@ -193,7 +199,7 @@ func main() {
 	}
 	logger.Info("Start server")
 
-	l, err := net.Listen("tcp", "127.0.0.1:5454")
+	l, err := net.Listen("tcp", "0.0.0.0:"+fmt.Sprint(SERVER_PORT))
 	if err != nil {
 		return
 	}
