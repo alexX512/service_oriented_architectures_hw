@@ -191,7 +191,7 @@ var SERVER_PORT = 5454
 
 func main() {
 	var loggerConfig = zap.NewProductionConfig()
-	loggerConfig.Level.SetLevel(zap.ErrorLevel)
+	loggerConfig.Level.SetLevel(zap.DebugLevel)
 
 	logger, err := loggerConfig.Build()
 	if err != nil {
